@@ -1,10 +1,14 @@
 # cd D:\Python\Заказы\TgBot & D: & python TelegrammBot.py
 
+# cd /home/poznyki4/Python/TgBot
+# python3 TelegrammBot.py
+import os
+import re
 import telebot
 from telebot import types
 from datetime import date
 from Token import TOKEN
-import os
+import psutil
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -13,6 +17,9 @@ not_ready_report: dict = dict() # {id: [пункт отчёта, [create_date, 1
 
 # хранит id водителей, заполняющий почти законченный отчёт и их продвижение в заполнении этого отчета
 ready_report: dict = dict()  # {id: [пункт отчёта, [1, 2, 3, 4, 5, 6, 7, 8, 9]]}
+
+# хранит id директора
+director_id: set = set()
 
 """
 Отчёт
@@ -43,24 +50,33 @@ if not os.path.exists("NotReadyReport.txt"):
 	my_file = open("NotReadyReport.txt", "w+")
 	my_file.close()
 
+
 if not os.path.exists("Reports.txt"):
 	my_file = open("Reports.txt", "w+")
 	my_file.close()
 
+
 @bot.message_handler(commands=['start'])
 def start(message):
+
+	if message.chat.id in director_id:
+		director_id.remove(message.chat.id)
+
 	bot.send_message(
 		message.chat.id,
-		"Добро пожаловать, пожалуйста авторизуйтесь! /registration"
+		f"Здравствуте, {message.from_user.first_name}, пожалуйста авторизуйтесь! /registration"
 	)
 
 
 @bot.message_handler(commands=['registration'])
 def registration(message):
 
+	if message.chat.id in director_id:
+		director_id.remove(message.chat.id)
+
 	markup = types.InlineKeyboardMarkup()
 
-	director = types.InlineKeyboardButton("Руководитель", callback_data="start")
+	director = types.InlineKeyboardButton("Руководитель", callback_data="director_input")
 	driver = types.InlineKeyboardButton("Водитель", callback_data="driver_menu_open")
 
 	markup.add(director, driver)
@@ -72,8 +88,6 @@ def registration(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
 
-	#global not_ready_report
-
 	# кнопки
 	if call.message:
 
@@ -83,6 +97,9 @@ def callback(call):
 
 		# открытие отчёта
 		elif call.data == 'open_report':
+
+			if call.message.chat.id in director_id:
+				director_id.remove(call.message.chat.id)
 
 			not_ready_report[call.message.chat.id] = [1,
 				[DateManagement().create_date_today(), None, None, None, None, None]
@@ -108,6 +125,40 @@ def callback(call):
 				)
 				driver_menu(call.message, True)
 
+		# вход за руководителя
+		elif call.data == "director_input":
+
+			markup = types.InlineKeyboardMarkup()
+
+			director_id.add(call.message.chat.id)
+
+			bot.send_message(
+				call.message.chat.id,
+				"Введите пароль, или авторизуйтесь как водитель /registration",
+				reply_markup=markup
+			)
+
+		# хранилище
+		elif call.data == "storage":
+			storage_menu(call.message)
+
+		# память сервера
+		elif call.data == "send_storage":
+			send_storage(call.message)
+
+		# регистрация
+		elif call.data == "registration":
+			registration(call.message)
+
+		# вход за админа
+		elif call.data == "AdminMenu":
+			director_menu(call.message)
+
+		# удаление всех отчётов
+		elif call.data == "del_repors_all":
+			FileManagemen().del_repors_all()
+			send_storage(call.message)
+
 	
 
 def driver_menu(message, open_report: bool):
@@ -131,14 +182,19 @@ def filling_report(message):
 	# незаполненный отчёт
 	if message.chat.id in not_ready_report:
 
-		# записывается ответ на текущий вопрос
+		if check_pattern(message.chat.id,
+							not_ready_report[message.chat.id][0], message.text):
 
-		# not_ready_report = {id: [пункт отчёта, [1, 2, 3, 4, 5]]}
-		not_ready_report[message.chat.id][1][
-			not_ready_report[message.chat.id][0]
-		] = message.text
+			not_ready_report[message.chat.id][1][
+				not_ready_report[message.chat.id][0]
+			] = message.text
 
-		not_ready_report[message.chat.id][0] += 1
+			not_ready_report[message.chat.id][0] += 1
+		else:
+			bot.send_message(
+				message.chat.id,
+				"❌Проверьте шаблон ввода и введите еще раз"
+			)
 
 		if not_ready_report[message.chat.id][0] != 6:
 			send_number_quest(
@@ -165,15 +221,21 @@ def filling_report(message):
 			driver_menu(message, False)
 
 	# заполненный отчёт
-	if message.chat.id in ready_report:
+	elif message.chat.id in ready_report:
 
-		# записывается ответ на текущий вопрос
+		if check_pattern(message.chat.id,
+							ready_report[message.chat.id][0], message.text):
 
-		ready_report[message.chat.id][1][
-			ready_report[message.chat.id][0]
-		] = message.text
+			ready_report[message.chat.id][1][
+				ready_report[message.chat.id][0]
+			] = message.text
 
-		ready_report[message.chat.id][0] += 1
+			ready_report[message.chat.id][0] += 1
+		else:
+			bot.send_message(
+				message.chat.id,
+				"❌Проверьте шаблон ввода и введите еще раз"
+			)
 
 
 		if ready_report[message.chat.id][0] != 10:
@@ -199,11 +261,80 @@ def filling_report(message):
 
 			driver_menu(message, True)
 
+	# регистрация директора
+	elif message.chat.id in director_id:
 
-def send_number_quest(bot, driver_id: int, quest_num: int):
+		if message.text == "QQQQQ":
+			bot.send_message(
+				message.chat.id,
+				"🧑‍💻"#"✅"
+			)
+			director_menu(message)
+		else:
+			bot.send_message(
+				message.chat.id,
+				"❌ Не верный пароль"
+			)
+
+
+def director_menu(message):
+	"""Меню директора"""
+
+	bot.delete_message(message.chat.id, message.message_id)
+
+	markup = types.InlineKeyboardMarkup(row_width=2)
+	
+	button_1 = types.InlineKeyboardButton("Хранилище", callback_data="storage")
+	button_2 = types.InlineKeyboardButton("Выйти из аккаунта", callback_data="registration")
+	button_3 = types.InlineKeyboardButton("Получить отчёт", callback_data="temp")
+
+	markup.add(button_1, button_2, button_3)
+
+	bot.send_message(message.chat.id, "__AdminMenu__", reply_markup=markup)
+
+def storage_menu(message, text="__Хранилище__"):
+	"""Управление хранилищем"""
+
+	bot.delete_message(message.chat.id, message.message_id)
+
+	markup = types.InlineKeyboardMarkup(row_width=2)
+	
+	button_1 = types.InlineKeyboardButton("Памать сервера", callback_data="send_storage")
+	button_2 = types.InlineKeyboardButton("Очистить память", callback_data="del_repors_all")
+	button_3 = types.InlineKeyboardButton("⬅Назад", callback_data="AdminMenu")
+
+	markup.add(button_1, button_2, button_3)
+
+	bot.send_message(message.chat.id, text, reply_markup=markup)
+
+
+
+def send_number_quest(bot, driver_id: int, quest_num: int) -> None:
 
 	"""Отправляет текст пункта из отчёта, который сейчас будет заполнен"""
 
+	if quest_num == 1:
+		bot.send_message(driver_id, "Номер маршрутного листа:")
+	elif quest_num == 2:
+		bot.send_message(driver_id, "(Фамилия И.О.):")
+	elif quest_num == 3:
+		bot.send_message(driver_id, "Гос. номер авто:")
+	elif quest_num == 4:
+		bot.send_message(driver_id, "⏱️Время начала смены (ЧЧ:ММ):")
+	elif quest_num == 5 or quest_num == 7:
+		bot.send_message(driver_id, "Введите текущий пробег автомобиля:")
+	elif quest_num == 6:
+		bot.send_message(driver_id, "⏱️Время конца смены (ЧЧ:ММ):")
+	elif quest_num == 8:
+		bot.send_message(driver_id, "Заправки: (Литров)")
+	elif quest_num == 9:
+		bot.send_message(driver_id, "Всего рейсов:")
+	elif quest_num == -1:
+		bot.send_message(driver_id, "(Фамилия И.О.):")
+
+
+
+	"""
 	match quest_num:
 		case 1:
 			bot.send_message(driver_id, "Номер маршрутного листа:")
@@ -227,7 +358,26 @@ def send_number_quest(bot, driver_id: int, quest_num: int):
 				"❌Введенные Вами данные некорректные, посмотрите на " +
 				"шаблон указанный в скобках и введите ещё раз."
 			)
+	"""
 
+def send_storage(message) -> None:
+	"""Отправляет сколько памаяти на сервере"""
+
+	dick = round(100 - psutil.disk_usage("/home").percent, 1)
+	memory = round(100 - psutil.virtual_memory().percent, 1)
+
+	txt_new = (
+		"__Хранилище__\n" +
+		f"Свободное место на диске: {dick} %\n" +
+		f"Свободное ОЗУ: {memory} %"
+	)
+
+	storage_menu(message, txt_new)
+
+	#bot.edit_message_text(txt_new, chat_id=message.chat.id, message_id=message.id)
+
+	
+			
 
 class FileManagemen:
 
@@ -245,7 +395,7 @@ class FileManagemen:
 			f.write(f"{report_data}\n")
 
 
-	def get_an_incomplete_report(self, driver_id: int) -> list | None:
+	def get_an_incomplete_report(self, driver_id: int) -> list: # -> list | None:
 		"""Получение инфы о не законченном отчёте"""
 		with open("NotReadyReport.txt", "r") as f:
 
@@ -258,6 +408,10 @@ class FileManagemen:
 						return [6, i[1:] + [None, None, None, None]]
 		return None
 
+	def del_repors_all(self) -> None:
+		"""Удаление всех отчётов"""
+		with open("Reports.txt", "w") as f:
+			...
 
 	def check_id(self, driver_id: int) -> bool:
 		"""Проверяет id в списке незаконченных отчетов"""
@@ -300,6 +454,17 @@ class DateManagement:
 		"""Текущая дата"""
 		date_now = date.today()
 		return f"{date_now.day}.{date_now.month}.{date_now.year}"
+
+def check_pattern(driver_id: int, quest_num: int, text: str) -> bool:
+	"""Проверка корректности"""
+
+	if quest_num in (4, 6):
+		result = re.match(r"\d{2}:\d{2}", text)
+		return True if not (result is None) else False
+
+	return True
+
+
 
 
 bot.infinity_polling(none_stop=True)
