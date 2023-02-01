@@ -2,13 +2,25 @@
 
 # cd /home/poznyki4/Python/TgBot
 # python3 TelegrammBot.py
+
 import os
 import re
 import telebot
 from telebot import types
 from datetime import date
+import pandas
 from Token import TOKEN
-import psutil
+#import psutil
+
+
+
+"""
+Установить
+pip install openpyxl
+pip install pyTelegramBotAPI
+pip install pandas
+pip install Jinja2
+"""
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -18,8 +30,11 @@ not_ready_report: dict = dict() # {id: [пункт отчёта, [create_date, 1
 # хранит id водителей, заполняющий почти законченный отчёт и их продвижение в заполнении этого отчета
 ready_report: dict = dict()  # {id: [пункт отчёта, [1, 2, 3, 4, 5, 6, 7, 8, 9]]}
 
-# хранит id директора
+# хранит id директора во время входа
 director_id: set = set()
+
+# получение отчёта {id: [0, time_1, time_2]}
+receive_report: dict = dict()
 
 """
 Отчёт
@@ -154,6 +169,13 @@ def callback(call):
 		elif call.data == "AdminMenu":
 			director_menu(call.message)
 
+		# отправка файла exel
+		elif call.data == "send_exel":
+
+			receive_report[call.message.chat.id] = [0, None, None]
+
+			send_range_date(call.message.chat.id, receive_report[call.message.chat.id][0])
+
 		# удаление всех отчётов
 		elif call.data == "del_repors_all":
 			FileManagemen().del_repors_all()
@@ -261,6 +283,47 @@ def filling_report(message):
 
 			driver_menu(message, True)
 
+	# получение данных о отчёте (exel)
+	elif message.chat.id in receive_report:
+
+		# корректность ввода
+		if check_pattern(message.chat.id, -100, message.text):
+
+			receive_report[message.chat.id][0] += 1
+
+			receive_report[message.chat.id][receive_report[message.chat.id][0]] = message.text
+
+			send_range_date(message.chat.id, receive_report[message.chat.id][0])
+			
+			if receive_report[message.chat.id][0] == 2:
+
+				# отправка
+				
+				file_name = (
+					receive_report[message.chat.id][1].replace(":", "-") + " - " +
+					receive_report[message.chat.id][2].replace(":", "-")
+				)
+
+				FileManagemen().create_table(
+					receive_report[message.chat.id][1],
+					receive_report[message.chat.id][2],
+					file_name
+				)
+
+				with open(f"{file_name}.xlsx", "rb") as f:
+					bot.send_document(message.chat.id, f)
+
+				os.remove(f"{file_name}.xlsx")
+
+				del receive_report[message.chat.id]
+
+				director_menu(message)
+				
+
+		else:
+			send_number_quest(bot, message.chat.id, -1)
+			send_range_date(message.chat.id, receive_report[message.chat.id][0])
+
 	# регистрация директора
 	elif message.chat.id in director_id:
 
@@ -269,12 +332,17 @@ def filling_report(message):
 				message.chat.id,
 				"🧑‍💻"#"✅"
 			)
+
+			director_id.remove(message.chat.id)
+
 			director_menu(message)
 		else:
 			bot.send_message(
 				message.chat.id,
 				"❌ Не верный пароль"
 			)
+
+	
 
 
 def director_menu(message):
@@ -286,11 +354,12 @@ def director_menu(message):
 	
 	button_1 = types.InlineKeyboardButton("Хранилище", callback_data="storage")
 	button_2 = types.InlineKeyboardButton("Выйти из аккаунта", callback_data="registration")
-	button_3 = types.InlineKeyboardButton("Получить отчёт", callback_data="temp")
+	button_3 = types.InlineKeyboardButton("Получить отчёт", callback_data="send_exel")
 
 	markup.add(button_1, button_2, button_3)
 
 	bot.send_message(message.chat.id, "__AdminMenu__", reply_markup=markup)
+
 
 def storage_menu(message, text="__Хранилище__"):
 	"""Управление хранилищем"""
@@ -306,7 +375,6 @@ def storage_menu(message, text="__Хранилище__"):
 	markup.add(button_1, button_2, button_3)
 
 	bot.send_message(message.chat.id, text, reply_markup=markup)
-
 
 
 def send_number_quest(bot, driver_id: int, quest_num: int) -> None:
@@ -330,7 +398,11 @@ def send_number_quest(bot, driver_id: int, quest_num: int) -> None:
 	elif quest_num == 9:
 		bot.send_message(driver_id, "Всего рейсов:")
 	elif quest_num == -1:
-		bot.send_message(driver_id, "(Фамилия И.О.):")
+		bot.send_message(
+			driver_id,
+			"❌Введенные Вами данные некорректные, посмотрите на " +
+			"шаблон указанный в скобках и введите ещё раз."
+		)
 
 
 
@@ -360,6 +432,23 @@ def send_number_quest(bot, driver_id: int, quest_num: int) -> None:
 			)
 	"""
 
+
+def send_range_date(director_id: int, quest_num: int) -> None:
+	"""Отправляет формат ввода данных"""
+
+	if quest_num == 0:
+		bot.send_message(
+			director_id,
+			"Введите дату в формате (ДД:ММ:ГГГГ)\nС которой будет заполняться таблица "
+		)
+	elif quest_num == 1:
+		bot.send_message(
+			director_id,
+			"Введите дату в формате (ДД:ММ:ГГГГ)\nГде будет заканчиваться таблица "
+		)
+
+
+
 def send_storage(message) -> None:
 	"""Отправляет сколько памаяти на сервере"""
 
@@ -376,9 +465,7 @@ def send_storage(message) -> None:
 
 	#bot.edit_message_text(txt_new, chat_id=message.chat.id, message_id=message.id)
 
-	
-			
-
+		
 class FileManagemen:
 
 	"""Класс управляет файловой системой"""
@@ -408,10 +495,12 @@ class FileManagemen:
 						return [6, i[1:] + [None, None, None, None]]
 		return None
 
+
 	def del_repors_all(self) -> None:
 		"""Удаление всех отчётов"""
 		with open("Reports.txt", "w") as f:
 			...
+
 
 	def check_id(self, driver_id: int) -> bool:
 		"""Проверяет id в списке незаконченных отчетов"""
@@ -435,6 +524,7 @@ class FileManagemen:
 				if i != "\n":
 					f.write(i)
 
+
 	def del_not_ready_report(self, driver_id: int) -> None:
 		"""Удаляет незаконченный отчёт"""
 
@@ -447,6 +537,105 @@ class FileManagemen:
 
 				if eval(i)[0] != driver_id:
 					f.write(i)
+
+
+	def create_table(self, start_time, end_time, file_name) -> None:
+		"""Создает таблицу exel"""
+
+		"""
+		1. номер маршрутного листа
+		2. фио
+		3. гос номер
+		4. время
+		5. пробег авто
+
+		закрыть смену
+		6. время конец
+		7. пробег авто
+		8. заправки литры
+		9. всего рейсов
+		"""
+
+		start_time = start_time.replace(":", " ", 3).split()
+		end_time = end_time.replace(":", " ", 3).split()
+
+
+		for i in range(3):
+			start_time[i] = int(start_time[i])
+			end_time[i] = int(end_time[i])
+
+		# var
+		start_day, start_month, start_year = start_time
+		end_day, end_month, end_year = end_time
+
+		data: dict = {
+			"Дата": [],
+			"Выезд": [],
+			"Возвращение": [],
+			"№ мар. листа": [],
+			"Водитель": [],
+			"Пробег в начале": [],
+			"Пробег в конце": [],
+			"Заправки (Л)": [],
+			"Гос. номер": [],
+			"Рейсов": [],
+		}
+
+		with open("Reports.txt", "r") as f:
+
+			lines = f.readlines()
+
+			"""
+			[день.месяц.год, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+			"""
+
+			for i in lines:
+
+				i = eval(i)
+
+				temp_date = i[0].replace(".", " ", 3).split()
+
+				for j in range(3):
+					temp_date[j] = int(temp_date[j])
+
+				now_day, now_month, now_year = temp_date
+
+				if (
+					# день
+					start_day <= now_day <= end_day and
+					start_month <= now_month <= end_month and
+					start_year <= now_year <= end_year
+					):
+
+					data["Дата"].append(i[0])
+					data["Выезд"].append(i[4])
+					data["Возвращение"].append(i[6])
+					data["№ мар. листа"].append(i[1])
+					data["Водитель"].append(i[2])
+					data["Пробег в начале"].append(i[5])
+					data["Пробег в конце"].append(i[7])
+					data["Заправки (Л)"].append(i[8])
+					data["Гос. номер"].append(i[3])
+					data["Рейсов"].append(i[9])
+
+		df = pandas.DataFrame(data)
+
+		def align(data):
+			return pandas.DataFrame('text-align: center', index=data.index, columns=data.columns)
+
+		def valign(data):
+			return pandas.DataFrame('horizontal-align: middle', index=data.index, columns=data.columns)
+
+		df = df.style.apply(align, axis=None).apply(valign, axis=None)
+
+		df.to_excel(f"{file_name}.xlsx")
+
+
+
+
+
+
+
 
 class DateManagement:
 
@@ -462,9 +651,12 @@ def check_pattern(driver_id: int, quest_num: int, text: str) -> bool:
 		result = re.match(r"\d{2}:\d{2}", text)
 		return True if not (result is None) else False
 
+	# для даты руководителя
+	elif quest_num == -100:
+		result = re.match(r"\d{2}:\d{2}:\d{4}", text)
+		return True if not (result is None) else False
+
 	return True
-
-
 
 
 bot.infinity_polling(none_stop=True)
